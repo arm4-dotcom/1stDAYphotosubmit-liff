@@ -197,6 +197,16 @@
     <div class="filters">
       <div class="filter-row">
         <div class="field">
+          <label>เดือน</label>
+          <select id="fMonth" onchange="onMonthChange()"><option value="">ทั้งหมด</option></select>
+        </div>
+        <div class="field">
+          <label>รอบ</label>
+          <select id="fRound" onchange="onRoundChange()"><option value="">ทั้งหมด</option></select>
+        </div>
+      </div>
+      <div class="filter-row">
+        <div class="field">
           <label>Account</label>
           <select id="fAccount" onchange="onAccountChange()"><option value="">ทั้งหมด</option></select>
         </div>
@@ -286,7 +296,7 @@ var state = {
   dataSpreadsheetId: null,
   allTasks: [],
   reasonOptions: DEFAULT_REASON_OPTIONS.slice(),
-  filters: { account: '', feArea: '', storeId: '', category: '' },
+  filters: { month: '', round: '', account: '', feArea: '', storeId: '', category: '' },
   storeTasks: [],   // ทุก task ของสาขาที่เลือก (ไม่ผ่านตัวกรองหมวดภาพ) — ใช้คิด progress รวม
   visibleTasks: [], // task ที่แสดงในตาราง (ผ่านตัวกรองหมวดภาพด้วย)
   saving: {},
@@ -452,12 +462,22 @@ function showScreen(name){
 function uniq(arr){ return arr.filter(function(v,i){ return v !== '' && v != null && arr.indexOf(v) === i; }); }
 
 function buildFilterOptions(){
-  fillSelect('fAccount', uniq(state.allTasks.map(function(t){ return t.account; })));
+  fillSelect('fMonth', uniq(state.allTasks.map(function(t){ return t.month; })));
   refreshDependentFilters();
 }
 
 function refreshDependentFilters(){
-  var byAccount = state.allTasks.filter(function(t){
+  var byMonth = state.allTasks.filter(function(t){
+    return !state.filters.month || t.month === state.filters.month;
+  });
+  fillSelect('fRound', uniq(byMonth.map(function(t){ return t.round; })), state.filters.round);
+
+  var byMonthRound = byMonth.filter(function(t){
+    return !state.filters.round || t.round === state.filters.round;
+  });
+  fillSelect('fAccount', uniq(byMonthRound.map(function(t){ return t.account; })), state.filters.account);
+
+  var byAccount = byMonthRound.filter(function(t){
     return !state.filters.account || t.account === state.filters.account;
   });
   fillSelect('fFeArea', uniq(byAccount.map(function(t){ return t.feArea; })), state.filters.feArea);
@@ -489,6 +509,32 @@ function fillDatalist(id, values, labelFn){
   }).join('');
 }
 
+function resetDownstreamFilters(){
+  state.filters.account = '';
+  state.filters.feArea = '';
+  state.filters.storeId = '';
+  document.getElementById('fAccount').value = '';
+  document.getElementById('fFeArea').value = '';
+  document.getElementById('fStoreId').value = '';
+  document.getElementById('fStoreName').value = '';
+}
+
+function onMonthChange(){
+  state.filters.month = document.getElementById('fMonth').value;
+  state.filters.round = '';
+  document.getElementById('fRound').value = '';
+  resetDownstreamFilters();
+  refreshDependentFilters();
+  clearStoreSelection();
+}
+
+function onRoundChange(){
+  state.filters.round = document.getElementById('fRound').value;
+  resetDownstreamFilters();
+  refreshDependentFilters();
+  clearStoreSelection();
+}
+
 function onAccountChange(){
   state.filters.account = document.getElementById('fAccount').value;
   state.filters.feArea = '';
@@ -509,8 +555,17 @@ function onFeAreaChange(){
   clearStoreSelection();
 }
 
+function getMonthRoundAccountAreaCandidates(){
+  return state.allTasks.filter(function(t){
+    return (!state.filters.month || t.month === state.filters.month) &&
+           (!state.filters.round || t.round === state.filters.round) &&
+           (!state.filters.account || t.account === state.filters.account) &&
+           (!state.filters.feArea || t.feArea === state.filters.feArea);
+  });
+}
+
 function onStoreIdInput(val){
-  var match = state.allTasks.find(function(t){ return t.storeId === val; });
+  var match = getMonthRoundAccountAreaCandidates().find(function(t){ return t.storeId === val; });
   if (match){
     selectStore(match);
   } else {
@@ -519,7 +574,7 @@ function onStoreIdInput(val){
 }
 
 function onStoreNameInput(val){
-  var match = state.allTasks.find(function(t){ return t.storenameTh === val; });
+  var match = getMonthRoundAccountAreaCandidates().find(function(t){ return t.storenameTh === val; });
   if (match){
     document.getElementById('fStoreId').value = match.storeId;
     selectStore(match);
@@ -529,23 +584,30 @@ function onStoreNameInput(val){
 }
 
 function selectStore(refTask){
+  state.filters.month = refTask.month;
+  state.filters.round = refTask.round;
   state.filters.account = refTask.account;
   state.filters.feArea = refTask.feArea;
   state.filters.storeId = refTask.storeId;
+  document.getElementById('fMonth').value = refTask.month;
+  document.getElementById('fRound').value = refTask.round;
   document.getElementById('fAccount').value = refTask.account;
   refreshDependentFilters();
   document.getElementById('fFeArea').value = refTask.feArea;
   document.getElementById('fStoreId').value = refTask.storeId;
   document.getElementById('fStoreName').value = refTask.storenameTh;
 
-  state.storeTasks = state.allTasks.filter(function(t){ return t.storeId === refTask.storeId; });
+  state.storeTasks = state.allTasks.filter(function(t){
+    return t.storeId === refTask.storeId && t.month === refTask.month && t.round === refTask.round;
+  });
   fillSelect('fCategory', uniq(state.storeTasks.map(function(t){ return t.category; })));
   state.filters.category = '';
   applyCategoryFilter();
 
+  var periodSuffix = (refTask.month || refTask.round) ? ' · ' + [refTask.month, refTask.round ? 'รอบ ' + refTask.round : ''].filter(Boolean).join(' ') : '';
   document.getElementById('statusAccount').textContent = refTask.account;
   document.getElementById('statusStoreId').textContent = refTask.storeId;
-  document.getElementById('statusStoreName').textContent = refTask.storenameTh;
+  document.getElementById('statusStoreName').textContent = refTask.storenameTh + periodSuffix;
   document.getElementById('statusCard').classList.add('show');
   document.getElementById('noStoreHint').style.display = 'none';
   document.getElementById('taskList').style.display = 'flex';
@@ -577,7 +639,9 @@ function applyCategoryFilter(){
 }
 
 function clearFilters(){
-  state.filters = { account:'', feArea:'', storeId:'', category:'' };
+  state.filters = { month:'', round:'', account:'', feArea:'', storeId:'', category:'' };
+  document.getElementById('fMonth').value = '';
+  document.getElementById('fRound').value = '';
   document.getElementById('fAccount').value = '';
   document.getElementById('fFeArea').value = '';
   document.getElementById('fStoreId').value = '';
