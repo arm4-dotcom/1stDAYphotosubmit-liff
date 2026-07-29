@@ -270,7 +270,10 @@ var CONFIG = {
   IMG_MAX_W: 1280,
   IMG_MAX_H: 720,
   IMG_QUALITY: 0.82,
-  COUNT_DEBOUNCE_MS: 700
+  COUNT_DEBOUNCE_MS: 700,
+  API_TIMEOUT_MS: 30000,   // เผื่อ Apps Script cold start (ตื่นครั้งแรกช้า)
+  API_RETRY_COUNT: 1,      // ลองซ้ำอัตโนมัติกี่ครั้งถ้าล้มเหลว/timeout
+  API_RETRY_DELAY_MS: 1200
 };
 
 var DEFAULT_REASON_OPTIONS = ['ร้านปิด / เข้าไม่ได้', 'สินค้าหมด / ไม่มีสินค้า', 'ไม่พบจุดที่ต้องถ่ายภาพ', 'พนักงานร้านไม่อนุญาต', 'อื่นๆ (ระบุ)'];
@@ -310,7 +313,7 @@ function callApi(action, params){
   return new Promise(function(resolve, reject){
     var url = CONFIG.WEB_APP_URL + '?' + buildQuery(Object.assign({ action: action }, params || {}));
     var xhr = new XMLHttpRequest();
-    xhr.timeout = 20000;
+    xhr.timeout = CONFIG.API_TIMEOUT_MS;
     xhr.open('GET', url, true);
     xhr.onload = function(){
       debugLog('GET '+action+' -> '+xhr.status);
@@ -321,17 +324,39 @@ function callApi(action, params){
       }
     };
     xhr.onerror = function(){ reject(new Error('เชื่อมต่อเซิร์ฟเวอร์ไม่สำเร็จ')); };
-    xhr.ontimeout = function(){ reject(new Error('หมดเวลาเชื่อมต่อ (20 วินาที) กรุณาลองใหม่')); };
+    xhr.ontimeout = function(){ reject(new Error('หมดเวลาเชื่อมต่อ กรุณาลองใหม่')); };
     xhr.send();
   });
 }
 
 function postApi(action, payload){
+  var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = controller ? setTimeout(function(){ controller.abort(); }, CONFIG.API_TIMEOUT_MS) : null;
   return fetch(CONFIG.WEB_APP_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ action: action }, payload))
-  }).then(function(res){ return res.json(); });
+    body: JSON.stringify(Object.assign({ action: action }, payload)),
+    signal: controller ? controller.signal : undefined
+  }).then(function(res){
+    if (timer) clearTimeout(timer);
+    return res.json();
+  }).catch(function(err){
+    if (timer) clearTimeout(timer);
+    if (err && err.name === 'AbortError') throw new Error('หมดเวลาเชื่อมต่อ กรุณาลองใหม่');
+    throw err;
+  });
+}
+
+/* เรียก fn (ที่ return Promise) ซ้ำอัตโนมัติถ้าล้มเหลว — ช่วยเรื่อง Apps Script cold start เป็นๆ หายๆ */
+function withRetry(fn, retriesLeft, onRetry){
+  if (retriesLeft === undefined) retriesLeft = CONFIG.API_RETRY_COUNT;
+  return fn().catch(function(err){
+    if (retriesLeft <= 0) throw err;
+    debugLog('retry (' + retriesLeft + ' left) after: ' + err.message);
+    if (onRetry) onRetry();
+    return new Promise(function(resolve){ setTimeout(resolve, CONFIG.API_RETRY_DELAY_MS); })
+      .then(function(){ return withRetry(fn, retriesLeft - 1, onRetry); });
+  });
 }
 
 function buildQuery(obj){
@@ -369,9 +394,10 @@ function initApp(){
     if (!lineId) return; // กำลัง redirect ไป login
     state.lineId = lineId;
     setLoadingText('กำลังโหลดรายการงาน...');
+    var onRetry = function(){ setLoadingText('เซิร์ฟเวอร์ตอบช้า กำลังลองใหม่...'); };
     return Promise.all([
-      callApi('getMonthlyRequirement', { lineId: lineId }),
-      callApi('getConfigOptions', {}).catch(function(){ return null; })
+      withRetry(function(){ return callApi('getMonthlyRequirement', { lineId: lineId }); }, undefined, onRetry),
+      withRetry(function(){ return callApi('getConfigOptions', {}); }, undefined, onRetry).catch(function(){ return null; })
     ]).then(function(results){
       var reqRes = results[0];
       var cfgRes = results[1];
@@ -776,7 +802,7 @@ function saveRow(task, fields){
     dataSpreadsheetId: state.dataSpreadsheetId
   }, fields);
 
-  postApi('autoSaveRow', payload).then(function(res){
+  withRetry(function(){ return postApi('autoSaveRow', payload); }).then(function(res){
     state.saving[task.rowKey] = false;
     if (res && res.success){
       task._error = false;
