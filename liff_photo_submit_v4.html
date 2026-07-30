@@ -159,6 +159,20 @@
   #debugPanel{display:none;position:fixed;bottom:90px;left:8px;right:8px;max-height:26vh;overflow:auto;
     background:rgba(0,0,0,.85);color:#7ee787;font-size:10px;font-family:monospace;padding:8px;
     border-radius:8px;z-index:80;white-space:pre-wrap;}
+
+  /* ---------- Overview (progress) screen ---------- */
+  .overview-intro{padding:0 16px 10px;font-size:12.5px;color:var(--text-secondary);}
+  .ov-card{margin:0 16px 10px;background:var(--bg-elevated);border:1px solid var(--border-subtle);
+    border-radius:var(--radius);padding:13px;}
+  .ov-card.ov-complete{border-color:rgba(52,211,153,.35);opacity:.85;}
+  .ov-top{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .ov-store-name{font-size:14px;font-weight:700;color:var(--text-primary);}
+  .ov-store-sub{font-size:11px;color:var(--text-muted);margin-top:2px;}
+  .ov-cat-list{margin-top:10px;display:flex;flex-direction:column;gap:5px;}
+  .ov-cat-row{display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);
+    background:var(--bg-elevated-2);border-radius:7px;padding:5px 9px;}
+  .ov-cat-row span:last-child{font-weight:600;color:var(--text-primary);}
+  .ov-cat-row.ov-cat-complete span:last-child{color:var(--success);}
 </style>
 </head>
 <body>
@@ -194,7 +208,11 @@
       </div>
     </header>
 
-    <div class="filters">
+    <button id="backToOverviewBtn" class="clear-filters" style="display:none;margin:0 16px 8px;" onclick="showOverview()">← กลับภาพรวมทุกสาขา</button>
+
+    <div id="overviewScreen" style="display:none;"></div>
+
+    <div id="filtersSection" class="filters">
       <div class="filter-row">
         <div class="field">
           <label>เดือน</label>
@@ -375,8 +393,24 @@ function buildQuery(obj){
 }
 
 function getQueryParam(name){
-  var m = new RegExp('[?&]'+name+'=([^&]*)').exec(window.location.search);
-  return m ? decodeURIComponent(m[1]) : null;
+  var direct = new RegExp('[?&]'+name+'=([^&]*)').exec(window.location.search);
+  if (direct) return decodeURIComponent(direct[1]);
+
+  // เผื่อกรณี LIFF redirect รอบสองยังไม่ทันอัปเดต window.location —
+  // ค่าที่ต่อท้าย liff.line.me/{id}?xxx จะถูกห่อไว้ใน "liff.state" (URL-encoded) ก่อน
+  var stateMatch = new RegExp('[?&]liff\\.state=([^&]*)').exec(window.location.search);
+  if (stateMatch){
+    try{
+      var decoded = decodeURIComponent(stateMatch[1]);
+      var qIdx = decoded.indexOf('?');
+      if (qIdx !== -1){
+        var stateQuery = decoded.slice(qIdx + 1).split('#')[0];
+        var inState = new RegExp('(?:^|&)'+name+'=([^&]*)').exec(stateQuery);
+        if (inState) return decodeURIComponent(inState[1]);
+      }
+    }catch(e){ /* liff.state ผิดรูปแบบ ข้ามไป */ }
+  }
+  return null;
 }
 
 /* =========================================================
@@ -428,7 +462,11 @@ function initApp(){
       }
       buildFilterOptions();
       showScreen('main');
-      renderNoStoreHint();
+      if (getQueryParam('view') === 'progress'){
+        showOverview();
+      } else {
+        renderNoStoreHint();
+      }
     });
   }).catch(function(err){
     debugLog('INIT ERROR: '+err.message);
@@ -661,6 +699,96 @@ function clearFilters(){
 function renderNoStoreHint(){
   document.getElementById('taskList').style.display = 'none';
   document.getElementById('noStoreHint').style.display = 'flex';
+}
+
+/* =========================================================
+   OVERVIEW (ภาพรวมทุกสาขา) — เปิดจากปุ่ม "ตรวจสอบ" ใน Rich Menu (?view=progress)
+   ========================================================= */
+function buildOverviewGroups(){
+  var groups = {};
+  var order = [];
+  state.allTasks.forEach(function(t){
+    var key = t.storeId + '|' + t.month + '|' + t.round;
+    if (!groups[key]){
+      groups[key] = {
+        storeId: t.storeId, storenameTh: t.storenameTh, account: t.account, feArea: t.feArea,
+        month: t.month, round: t.round, tasks: [], categories: {}, categoryOrder: []
+      };
+      order.push(key);
+    }
+    groups[key].tasks.push(t);
+  });
+  var list = order.map(function(k){ return groups[k]; });
+  list.forEach(function(g){
+    g.tasks.forEach(function(t){
+      var cat = t.category || 'ไม่ระบุหมวด';
+      if (!g.categories[cat]){ g.categories[cat] = { done: 0, total: 0 }; g.categoryOrder.push(cat); }
+      g.categories[cat].total++;
+      if (isRowComplete(t)) g.categories[cat].done++;
+    });
+    g.done = g.tasks.filter(isRowComplete).length;
+    g.total = g.tasks.length;
+  });
+  var incomplete = list.filter(function(g){ return g.done < g.total; })
+    .sort(function(a,b){ return (b.total-b.done) - (a.total-a.done) || a.storenameTh.localeCompare(b.storenameTh); });
+  var complete = list.filter(function(g){ return g.done >= g.total; })
+    .sort(function(a,b){ return a.storenameTh.localeCompare(b.storenameTh); });
+  return incomplete.concat(complete);
+}
+
+function showOverview(){
+  document.getElementById('filtersSection').style.display = 'none';
+  document.getElementById('taskList').style.display = 'none';
+  document.getElementById('noStoreHint').style.display = 'none';
+  document.getElementById('statusCard').classList.remove('show');
+  document.getElementById('submitBar').style.display = 'none';
+  document.getElementById('backToOverviewBtn').style.display = 'none';
+  document.getElementById('overviewScreen').style.display = 'block';
+  renderOverview();
+}
+
+function renderOverview(){
+  var container = document.getElementById('overviewScreen');
+  var groups = buildOverviewGroups();
+  state.overviewGroups = groups;
+  if (!groups.length){
+    container.innerHTML = '<div class="fullscreen-msg" style="padding:30px 24px;"><p class="title">ไม่พบรายการงาน</p></div>';
+    return;
+  }
+  var doneCount = groups.filter(function(g){ return g.done >= g.total; }).length;
+  var html = '<div class="overview-intro">ทั้งหมด ' + groups.length + ' สาขา · ทำครบแล้ว ' + doneCount + ' สาขา — แตะสาขาเพื่อเข้าไปทำรายการ</div>';
+  groups.forEach(function(g, idx){
+    var pct = g.total ? Math.round((g.done/g.total)*100) : 0;
+    var complete = g.done >= g.total;
+    var catRows = g.categoryOrder.map(function(cat){
+      var c = g.categories[cat];
+      var catComplete = c.done >= c.total;
+      return '<div class="ov-cat-row' + (catComplete ? ' ov-cat-complete' : '') + '"><span>' + escapeHtml(cat) + '</span><span>' + c.done + '/' + c.total + '</span></div>';
+    }).join('');
+    html += ''+
+    '<div class="ov-card' + (complete ? ' ov-complete' : '') + '" onclick="openStoreFromOverview(' + idx + ')">' +
+      '<div class="ov-top">' +
+        '<div><div class="ov-store-name">' + escapeHtml(g.storenameTh) + '</div>' +
+        '<div class="ov-store-sub">' + escapeHtml(g.account) + ' · รหัส ' + escapeHtml(g.storeId) + ' · ' + escapeHtml(g.month) + ' รอบ ' + escapeHtml(g.round) + '</div></div>' +
+        (complete ? '<span class="status-chip done">✓ ครบแล้ว</span>' : '<span class="status-chip pending">' + g.done + '/' + g.total + '</span>') +
+      '</div>' +
+      '<div class="progress-track" style="margin:9px 0;"><div class="progress-fill" style="width:' + pct + '%;"></div></div>' +
+      '<div class="ov-cat-list">' + catRows + '</div>' +
+    '</div>';
+  });
+  container.innerHTML = html;
+}
+
+function openStoreFromOverview(idx){
+  var group = state.overviewGroups[idx];
+  if (!group) return;
+
+  document.getElementById('overviewScreen').style.display = 'none';
+  document.getElementById('filtersSection').style.display = 'flex';
+  document.getElementById('submitBar').style.display = 'flex';
+  document.getElementById('backToOverviewBtn').style.display = 'inline-flex';
+
+  selectStore(group.tasks[0]);
 }
 
 /* =========================================================
