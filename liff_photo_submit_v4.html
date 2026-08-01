@@ -337,7 +337,8 @@ var state = {
   saving: {},
   currentEditKey: null,
   pendingPhotoDataUrl: null,
-  cameFromOverview: false // true = เข้ามาจากปุ่ม "ตรวจสอบความคืบหน้า" แล้วแตะสาขาเข้ามาแก้ไข
+  cameFromOverview: false, // true = เข้ามาจากปุ่ม "ตรวจสอบความคืบหน้า" แล้วแตะสาขาเข้ามาแก้ไข
+  overviewFilters: { account: '', month: '', round: '' } // ตัวกรอง Account/เดือน/รอบ ในหน้าภาพรวมทุกสาขา
 };
 
 /* =========================================================
@@ -730,7 +731,12 @@ function renderNoStoreHint(){
 function buildOverviewGroups(){
   var groups = {};
   var order = [];
-  state.allTasks.forEach(function(t){
+  var source = state.allTasks.filter(function(t){
+    return (!state.overviewFilters.account || t.account === state.overviewFilters.account) &&
+           (!state.overviewFilters.month || t.month === state.overviewFilters.month) &&
+           (!state.overviewFilters.round || t.round === state.overviewFilters.round);
+  });
+  source.forEach(function(t){
     var key = t.storeId + '|' + t.month + '|' + t.round;
     if (!groups[key]){
       groups[key] = {
@@ -774,12 +780,35 @@ function renderOverview(){
   var container = document.getElementById('overviewScreen');
   var groups = buildOverviewGroups();
   state.overviewGroups = groups;
+
+  var accOptions = uniq(state.allTasks.map(function(t){ return t.account; }));
+  var monthOptions = uniq(state.allTasks.map(function(t){ return t.month; }));
+  var roundOptions = uniq(state.allTasks.map(function(t){ return t.round; }));
+  var filterHtml = ''+
+    '<div class="filters" style="padding:0 16px 10px;">' +
+      '<div class="filter-row">' +
+        '<div class="field"><label>Account</label><select id="ovFAccount" onchange="onOverviewFilterChange()"><option value="">ทั้งหมด</option>' +
+          accOptions.map(function(a){ return '<option value="'+escapeAttr(a)+'"'+(state.overviewFilters.account===a?' selected':'')+'>'+escapeHtml(a)+'</option>'; }).join('') +
+        '</select></div>' +
+        '<div class="field"><label>เดือน</label><select id="ovFMonth" onchange="onOverviewFilterChange()"><option value="">ทั้งหมด</option>' +
+          monthOptions.map(function(m){ return '<option value="'+escapeAttr(m)+'"'+(state.overviewFilters.month===m?' selected':'')+'>'+escapeHtml(m)+'</option>'; }).join('') +
+        '</select></div>' +
+      '</div>' +
+      '<div class="filter-row">' +
+        '<div class="field"><label>รอบ</label><select id="ovFRound" onchange="onOverviewFilterChange()"><option value="">ทั้งหมด</option>' +
+          roundOptions.map(function(r){ return '<option value="'+escapeAttr(r)+'"'+(state.overviewFilters.round===r?' selected':'')+'>'+escapeHtml(r)+'</option>'; }).join('') +
+        '</select></div>' +
+        '<div class="field"></div>' +
+      '</div>' +
+      '<button class="clear-filters" onclick="clearOverviewFilters()">ล้างตัวกรองภาพรวม</button>' +
+    '</div>';
+
   if (!groups.length){
-    container.innerHTML = '<div class="fullscreen-msg" style="padding:30px 24px;"><p class="title">ไม่พบรายการงาน</p></div>';
+    container.innerHTML = filterHtml + '<div class="fullscreen-msg" style="padding:30px 24px;"><p class="title">ไม่พบรายการงานตามตัวกรองนี้</p></div>';
     return;
   }
   var doneCount = groups.filter(function(g){ return g.done >= g.total; }).length;
-  var html = '<div class="overview-intro">ทั้งหมด ' + groups.length + ' สาขา · ทำครบแล้ว ' + doneCount + ' สาขา — แตะสาขาเพื่อเข้าไปทำรายการ</div>';
+  var html = filterHtml + '<div class="overview-intro">ทั้งหมด ' + groups.length + ' สาขา · ทำครบแล้ว ' + doneCount + ' สาขา — แตะสาขาเพื่อเข้าไปทำรายการ</div>';
   groups.forEach(function(g, idx){
     var pct = g.total ? Math.round((g.done/g.total)*100) : 0;
     var complete = g.done >= g.total;
@@ -800,6 +829,18 @@ function renderOverview(){
     '</div>';
   });
   container.innerHTML = html;
+}
+
+function onOverviewFilterChange(){
+  state.overviewFilters.account = document.getElementById('ovFAccount').value;
+  state.overviewFilters.month = document.getElementById('ovFMonth').value;
+  state.overviewFilters.round = document.getElementById('ovFRound').value;
+  renderOverview();
+}
+
+function clearOverviewFilters(){
+  state.overviewFilters = { account: '', month: '', round: '' };
+  renderOverview();
 }
 
 function openStoreFromOverview(idx){
@@ -936,7 +977,7 @@ function updateProgress(){
 
   var btn = document.getElementById('submitBtn');
   btn.textContent = state.cameFromOverview ? 'แก้ไขบันทึกข้อมูลใหม่' : 'ส่งข้อมูลทั้งหมด';
-  btn.disabled = !(total > 0 && done === total);
+  btn.disabled = total === 0; // ปลดล็อก: กดส่ง/บันทึกได้แม้กรอกยังไม่ครบทุกรายการ
 }
 
 /* =========================================================
@@ -1078,11 +1119,11 @@ function saveRow(task, fields){
 function onSubmitAll(){
   var total = state.storeTasks.length;
   var done = state.storeTasks.filter(isRowComplete).length;
-  if (done !== total){
-    showToast('ยังกรอกข้อมูลไม่ครบทุกรายการ');
-    return;
-  }
-  showToast(state.cameFromOverview ? 'แก้ไขข้อมูลเรียบร้อยแล้ว ✓' : 'บันทึกข้อมูลครบถ้วนแล้ว ✓');
+  var complete = (total > 0 && done === total);
+  var msg = complete
+    ? (state.cameFromOverview ? 'แก้ไขข้อมูลเรียบร้อยแล้ว ✓' : 'บันทึกข้อมูลครบถ้วนแล้ว ✓')
+    : 'บันทึกข้อมูลที่กรอกไว้แล้ว (' + done + '/' + total + ' รายการ)';
+  showToast(msg);
   if (typeof liff !== 'undefined' && liff.isInClient && liff.isInClient()){
     setTimeout(function(){ liff.closeWindow(); }, 900);
   }
