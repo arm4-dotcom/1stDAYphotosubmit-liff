@@ -890,6 +890,13 @@ function driveThumbUrl(url){
   return 'https://drive.google.com/thumbnail?id=' + m[1] + '&sz=w300';
 }
 
+/* หมวด "เช็คราคา" ใช้ field เดิม (count) แต่เปลี่ยน label/placeholder/keyboard ให้เหมาะกับกรอกราคา
+   ชื่อหมวดต้องตรงกับค่าที่ตั้งไว้ในชีท Config คอลัมน์ หมวดภาพ เป๊ะๆ */
+var PRICE_CATEGORY_NAME = 'เช็คราคา';
+function isPriceCategory(category){
+  return category === PRICE_CATEGORY_NAME;
+}
+
 function renderTaskCard(t){
   var complete = isRowComplete(t);
   var savingNow = !!state.saving[t.rowKey];
@@ -939,7 +946,7 @@ function renderTaskCard(t){
     '<div class="task-body">'+
       '<div class="'+photoSlotClass+'" onclick="openPhotoPicker(\''+escKey(t.rowKey)+'\')">'+photoInner+retakeTag+'</div>'+
       '<div class="task-inputs">'+
-        '<div class="count-row"><label>จำนวนจุด</label><input type="number" inputmode="numeric" min="0" value="'+escapeAttr(t.count)+'" onchange="onCountChange(\''+escKey(t.rowKey)+'\', this.value)"></div>'+
+        '<div class="count-row"><label>'+(isPriceCategory(t.category)?'ราคา':'จำนวนจุด')+'</label><input type="number" inputmode="'+(isPriceCategory(t.category)?'decimal':'numeric')+'" min="0" step="'+(isPriceCategory(t.category)?'0.01':'1')+'" placeholder="'+(isPriceCategory(t.category)?'เช่น 99.50':'')+'" value="'+escapeAttr(t.count)+'" onchange="onCountChange(\''+escKey(t.rowKey)+'\', this.value)"></div>'+
         '<div class="reason-row"><select onchange="onReasonChange(\''+escKey(t.rowKey)+'\', this.value)">'+reasonOptionsHtml+'</select></div>'+
         '<input class="reason-note'+(isOther?' show':'')+'" type="text" placeholder="ระบุเหตุผลเพิ่มเติม..." value="'+(isOther?escapeAttr(t.reason):'')+'" onchange="onReasonChange(\''+escKey(t.rowKey)+'\', this.value)">'+
         lastEditedHtml+
@@ -1055,6 +1062,16 @@ var countTimers = {};
 function onCountChange(rowKey, value){
   var task = findTaskByKey(rowKey);
   if (!task) return;
+
+  if (isPriceCategory(task.category) && value !== ''){
+    var priceNum = parseFloat(value);
+    if (isNaN(priceNum) || priceNum <= 0){
+      showToast('กรุณากรอกราคาที่มากกว่า 0');
+      renderTaskList();
+      return;
+    }
+  }
+
   task.count = value;
   updateProgress();
   clearTimeout(countTimers[rowKey]);
